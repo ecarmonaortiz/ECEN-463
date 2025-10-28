@@ -254,7 +254,7 @@ down = int(grad_ramp * sampFreq)
 
 total_trap = up + hold +down
 dephasing = up + hold/2 + down
-cSamples = int(TE * sampFreq) + hold/2 + down
+cSamples = int(TE * sampFreq) + hold//2 + down
 #hdwf = c_int()
 rgdSamples2 = (c_double*cSamples)()
 
@@ -263,22 +263,27 @@ channel = c_int(1)   ### changed to channel 2
 set_pos_powersupply(5)
 
 
-for i in range(len(cSamples)):
-    if i < int(Tp * sampFreq) + up:
-        rgdSamples2[i] = (grad_amp*i / up) * scale_factor
+for i in range(cSamples):
+    if i < int(Tp*sampFreq):
+        rgdSamples2[i] = 0
+    elif i < int(Tp * sampFreq) + up:
+        rgdSamples2[i] = (grad_amp*(i - int(Tp*sampFreq))/up) * scale_factor
         
     elif i < int(Tp * sampFreq) + up+ hold/2 :
         rgdSamples2[i] = grad_amp * scale_factor
         
     elif i< int(Tp*sampFreq) +up + hold/2 + down:
-        rgdSamples2[i] = (grad_amp * (1 - (i - int(Tp * sampFreq) - up - hold/2 / down))) * scale_factor
+        rgdSamples2[i] = (grad_amp * (1 - (i - int(Tp * sampFreq) - up - hold/2) / down)) * scale_factor
+    elif i < int(TE*sampFreq) - hold/2 - up:
+        rgdSamples2[i] = 0
         
-    elif i < (int(TE * sampFreq) - hold/2) and i > (int(TE*sampFreq) - hold/2 - up):
-        rgdSamples2[i] = grad_amp*i / up
-    elif i < int(TE*sampFreq) - hold/2:
+    elif i < (int(TE * sampFreq) - hold/2) and i >= (int(TE*sampFreq) - hold/2 - up):
+        rgdSamples2[i] = grad_amp*(i - (int(TE*sampFreq) -hold/2 -up )) / up
+    elif i < int(TE*sampFreq) + hold/2:
         rgdSamples2[i] = grad_amp
     else:
-        rgdSamples2[i] = grad_amp * (1 - (i - int(TE+sampFreq) - Tacq/2) / down)
+        rgdSamples2[i] = grad_amp * (1 - (i - int(TE*sampFreq) - hold/2) / down)
+        
                           
 
 # for i in range(total_trap):
@@ -296,111 +301,125 @@ trap_total_sec = total_trap / float(sampFreq)
 trap_freq = 1.0 / trap_total_sec
 t_start = TE - 0.5 * trap_total_sec
 
+t = np.arange(cSamples) / sampFreq
+
+# convert ctypes array to numpy for easier plotting
+rgd_np = np.array(rgdSamples2)
+
+# plot
+plt.figure()
+plt.plot(t, rgd_np)
+plt.title("Gradient Waveform rgdSamples2 Over Time")
+plt.xlabel("Time (s)")
+plt.ylabel("Amplitude (arb units)")
+plt.grid(True)
+plt.show()
+
 
 
     
-for f in f_range:
-    rgd_avg = np.zeros(numSamp)
-    for i in range(num_avg):
-        start_time = time.time()
-        print("Generating custom waveform...")
-        dwf.FDwfAnalogOutNodeEnableSet(hdwf, channel, AnalogOutNodeCarrier, c_int(1))
-        dwf.FDwfAnalogOutNodeFunctionSet(hdwf, channel, AnalogOutNodeCarrier, funcCustom) 
-        dwf.FDwfAnalogOutNodeDataSet(hdwf, channel, AnalogOutNodeCarrier, rgdSamples2, c_int(cSamples))
-        dwf.FDwfAnalogOutNodeFrequencySet(hdwf, channel, AnalogOutNodeCarrier, c_double(trap_freq)) 
-        #dwf.FDwfAnalogOutNodeAmplitudeSet(hdwf, channel, AnalogOutNodeCarrier, c_double(2.0)) 
+# for f in f_range:
+#     rgd_avg = np.zeros(numSamp)
+#     for i in range(num_avg):
+#         start_time = time.time()
+#         print("Generating custom waveform...")
+#         dwf.FDwfAnalogOutNodeEnableSet(hdwf, channel, AnalogOutNodeCarrier, c_int(1))
+#         dwf.FDwfAnalogOutNodeFunctionSet(hdwf, channel, AnalogOutNodeCarrier, funcCustom) 
+#         dwf.FDwfAnalogOutNodeDataSet(hdwf, channel, AnalogOutNodeCarrier, rgdSamples2, c_int(cSamples))
+#         dwf.FDwfAnalogOutNodeFrequencySet(hdwf, channel, AnalogOutNodeCarrier, c_double(trap_freq)) 
+#         #dwf.FDwfAnalogOutNodeAmplitudeSet(hdwf, channel, AnalogOutNodeCarrier, c_double(2.0)) 
         
-        dwf.FDwfAnalogOutRunSet(hdwf, channel, c_double(trap_total_sec)) # run for 2 periods   CHANGED TO 1 PERIOD
-        dwf.FDwfAnalogOutWaitSet(hdwf, channel, c_double(t_start)) # wait one pulse time # CHANGED 
-        dwf.FDwfAnalogOutRepeatSet(hdwf, channel, c_int(1)) # repeat 3 times  I CHANGED THIS TO 1
-        dwf.FDwfAnalogOutTriggerSourceSet(hdwf, channel, trigsrcDigitalOut)  # sets the trigger source
-        #dwf.FDwfAnalogOutConfigure(hdwf, channel, c_int(1))    # This is in "arm_analog" function
+#         dwf.FDwfAnalogOutRunSet(hdwf, channel, c_double(trap_total_sec)) # run for 2 periods   CHANGED TO 1 PERIOD
+#         dwf.FDwfAnalogOutWaitSet(hdwf, channel, c_double(t_start)) # wait one pulse time # CHANGED 
+#         dwf.FDwfAnalogOutRepeatSet(hdwf, channel, c_int(1)) # repeat 3 times  I CHANGED THIS TO 1
+#         dwf.FDwfAnalogOutTriggerSourceSet(hdwf, channel, trigsrcDigitalOut)  # sets the trigger source
+#         #dwf.FDwfAnalogOutConfigure(hdwf, channel, c_int(1))    # This is in "arm_analog" function
         
-        ########################################################################
-        ########################################################################
-        set_dio(2,totalCycles,att_start,att_end)
-        set_dio(3,totalCycles,0.002,T_R)   #to extend to both pulses
+#         ########################################################################
+#         ########################################################################
+#         set_dio(2,totalCycles,att_start,att_end)
+#         set_dio(3,totalCycles,0.002,T_R)   #to extend to both pulses
         
         
-        # set up acquisition (scope) (Lab 2)
-        delay = 0.0
-        amp_list = np.linspace(1,5,10)
+#         # set up acquisition (scope) (Lab 2)
+#         delay = 0.0
+#         amp_list = np.linspace(1,5,10)
             
             
-        y1 = set_wavegen(0,f,amplitude,Tp,predelay,Npulse)  ####### Added this line
-        y1 = set_scope(sampFreq,numSamp,Tacq,delay)
-        y2 = set_wavegen(1, f - IF, amplitude, tLO, LO_start, 1)
+#         y1 = set_wavegen(0,f,amplitude,Tp,predelay,Npulse)  ####### Added this line
+#         y1 = set_scope(sampFreq,numSamp,Tacq,delay)
+#         y2 = set_wavegen(1, f - IF, amplitude, tLO, LO_start, 1)
     
-    # Arm the analog and digital sections 
+#     # Arm the analog and digital sections 
     
-        dwell = 1.0 / sampFreq
-        time2 = []
-        for i in range(0,numSamp):
-            time2.append(i*dwell)
+#         dwell = 1.0 / sampFreq
+#         time2 = []
+#         for i in range(0,numSamp):
+#             time2.append(i*dwell)
         
         
-         ## Arming AD2
-        y1 = arm_dio(SeqTime)
-        y1 = arm_analog()  
+#          ## Arming AD2
+#         y1 = arm_dio(SeqTime)
+#         y1 = arm_analog()  
         
-        time_passed = time.time() - start_time
-        time.sleep(max(0, TR - time_passed)) 
+#         time_passed = time.time() - start_time
+#         time.sleep(max(0, TR - time_passed)) 
          
-         # Time stuff
-        now = datetime.now()
-        print(now) 
+#          # Time stuff
+#         now = datetime.now()
+#         print(now) 
          
-        print("going to trigger")
-        y1 = trigger_and_read_ch0(rgdSamples,numSamp)
-        print("back from trigger")
-        rgd_avg = rgd_avg + rgdSamples[:]
-    rgd_avg = rgd_avg / num_avg
-    Tacqms = Tacq * 1000
-    # plt.plot(time2, rgd_avg)
-    now = str(now)
-    f_string = str(f)
+#         print("going to trigger")
+#         y1 = trigger_and_read_ch0(rgdSamples,numSamp)
+#         print("back from trigger")
+#         rgd_avg = rgd_avg + rgdSamples[:]
+#     rgd_avg = rgd_avg / num_avg
+#     Tacqms = Tacq * 1000
+#     # plt.plot(time2, rgd_avg)
+#     now = str(now)
+#     f_string = str(f)
          
-    ## Labels
+#     ## Labels
 
     
-    ## fft stuff
-    sig= list(rgd_avg)
-    T = numSamp
-    limts = [IF - 5000, IF + 5000]
+#     ## fft stuff
+#     sig= list(rgd_avg)
+#     T = numSamp
+#     limts = [IF - 5000, IF + 5000]
 
-    sos = signal.butter(2,limts,'bandpass', fs = sampFreq,output = 'sos')
-    filtered = signal.sosfilt(sos, sig)  
-    fft_values = np.fft.fft(filtered)
+#     sos = signal.butter(2,limts,'bandpass', fs = sampFreq,output = 'sos')
+#     filtered = signal.sosfilt(sos, sig)  
+#     fft_values = np.fft.fft(filtered)
     
-    N = len(sig)
-    
-    
-    freq = np.fft.fftfreq(N,1/sampFreq)
-    
-    magnitude = np.abs(fft_values)
-    
-    plt.subplot(2,1,1)
-    plt.plot(time2, filtered)
-    plt.title('Eric and Matthew '+ now + 'frequency: ' + f_string)
-    
-    plt.xlabel('Time (sec)')
-    plt.ylabel('Amplitude (V)')
-    
-    plt.subplot(2,1,2)
-    plt.plot(freq[:N//2]/1000,magnitude[:N//2])
-    plt.title('FFT of signal @ ' + f_string)
-    plt.xlabel('Frequency (kHz)')
-    plt.ylabel('Magnitude')
-    plt.xlim(80,120)
-    plt.ylim(0, 2)
-    
-    np.savetxt("signal.csv" + f_string,filtered,delimiter=",",fmt ="%d")
-    print('CSV file created succesfully')
+#     N = len(sig)
     
     
+#     freq = np.fft.fftfreq(N,1/sampFreq)
     
-    plt.tight_layout()
-    plt.show()
+#     magnitude = np.abs(fft_values)
+    
+#     plt.subplot(2,1,1)
+#     plt.plot(time2, filtered)
+#     plt.title('Eric and Matthew '+ now + 'frequency: ' + f_string)
+    
+#     plt.xlabel('Time (sec)')
+#     plt.ylabel('Amplitude (V)')
+    
+#     plt.subplot(2,1,2)
+#     plt.plot(freq[:N//2]/1000,magnitude[:N//2])
+#     plt.title('FFT of signal @ ' + f_string)
+#     plt.xlabel('Frequency (kHz)')
+#     plt.ylabel('Magnitude')
+#     plt.xlim(80,120)
+#     plt.ylim(0, 2)
+    
+#     np.savetxt("signal.csv" + f_string,filtered,delimiter=",",fmt ="%d")
+#     print('CSV file created succesfully')
+    
+    
+    
+#     plt.tight_layout()
+#     plt.show()
         
         
-y1 = reset_and_close()
+# y1 = reset_and_close()
