@@ -212,19 +212,10 @@ frequency_per_point = 1/Tacq     #Hz
 resolution = FOV / num_points   # mm 
 grad_amp = (frequency_per_point /resolution) /425.7   # Hz/mm -> G/cm
 AD2_volt = grad_amp * 8 /11    # gain = 11,  resistance = 4, 0.5 G/cm/A
+shim = 1 
 
 
-# offset values in volts (0 <= x <= .1)
-# offset0 = .1
-# offset1 = .1     
 
-# shim = 1 
-# if shim == 1 :
-#     #set up phase encode AD2
-#     y1 = set_ad2_device(1)    # point at AD2 #2
-#     y1 = set_shim(0,offset0)   # set offset on channel 0 to offset0
-#     y1 = set_shim(1,offset1)   # set offset on channel 1 to offset1
-#     y1 = set_ad2_device(0)
 
 ###################################################################
        # Opens the AD2s
@@ -302,6 +293,17 @@ y = set_dio(4,totalCycles,Trig_low,Trig_high)
 ################################################################
 # Deleted the RF pulse generator from Example 1
 #######   Added this code to do the custom waveform
+
+#offset values in volts (0 <= x <= .1)
+offset0 = .1
+offset1 = .1     
+
+if shim == 1 :
+    #set up phase encode AD2
+    y1 = set_ad2_device(1)    # point at AD2 #2
+    y1 = set_shim(0,offset0)   # set offset on channel 0 to offset0
+    y1 = set_shim(1,offset1)   # set offset on channel 1 to offset1
+    y1 = set_ad2_device(0)
 
     
 for f in f_range:
