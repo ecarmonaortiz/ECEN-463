@@ -1,0 +1,531 @@
+'''
+Starting code for the Waveforms SDK.    MR Engineering Class
+Lab 2 Example 2
+Note:  Pin 0 is set to be an external scope trigger
+       Pin 4 is connected to external trigger input 1,  to trigger the AD2 digitizer
+'''
+
+from dwfconstants import *
+
+import sys
+import matplotlib.pyplot as plt
+import numpy as np
+import time
+from datetime import datetime
+from scipy.fft import fft, fftfreq, fftshift
+from scipy import signal
+import ctypes
+
+
+
+##   Hide the SDK functions by left click next to the if statement
+import_mre_functions = 1
+if import_mre_functions == 1:
+    
+  
+    def set_dio(ChNum,totalCycles,low,high):
+        #   The DIO can be set by the number of cycles low, then high, and then low again. 
+        #   Input values are in seconds, then converted to cycles assuming 1 clock cycle/ 10 microseconds.  
+        DIOLow1 = int(low * 10**5)
+        DIOHigh = int(high * 10**5)
+        DIOLow2 = int(totalCycles - DIOHigh - DIOLow1)
+        dwf.FDwfDigitalOutEnableSet(hdwf, c_int(ChNum), c_int(1))
+        dwf.FDwfDigitalOutDividerSet(hdwf, c_int(ChNum), c_int(int(hzSys.value / 100000)))
+        dwf.FDwfDigitalOutCounterSet(hdwf, c_int(ChNum), c_int(DIOLow2), c_int(DIOHigh))
+        dwf.FDwfDigitalOutCounterInitSet(hdwf, c_int(ChNum), c_int(0), c_int(DIOLow1))
+        dwf.FDwfDigitalOutIdleSet(hdwf, c_int(ChNum), DwfDigitalOutIdleLow)
+        return 
+    
+    def set_scope(sampFreq,numSamp,acqTime,Delay):
+        dwf.FDwfAnalogInAcquisitionModeSet(hdwf, acqmodeSingle)  # set to a single acquisition
+        dwf.FDwfAnalogInFrequencySet(hdwf, c_double(sampFreq))  # sets up the frequency
+        dwf.FDwfAnalogInBufferSizeSet(hdwf, c_int(numSamp))  # sets the buffer
+        dwf.FDwfAnalogInChannelEnableSet(hdwf, c_int(0), c_bool(True))  # enables channel 0
+        dwf.FDwfAnalogInChannelEnableSet(hdwf, c_int(1), c_bool(False))  # disable  channel 1
+        dwf.FDwfAnalogInChannelRangeSet(hdwf, c_int(-1), c_double(5))  # sets the range
+        ##set to decimate
+        dwf.FDwfAnalogInChannelFilterSet(hdwf, c_int(-1), filterDecimate)   
+        dwf.FDwfAnalogInTriggerSourceSet(hdwf, trigsrcExternal1)  # sets the trigger source
+        dwf.FDwfAnalogInTriggerConditionSet(hdwf, DwfTriggerSlopeRise)
+        dwf.FDwfAnalogInTriggerPositionSet(hdwf, c_double(acqTime / 2 + Delay) ) # sets the trigger position
+        y = 0
+        return y
+    
+    def set_wavegen(ChNum,freq,amplitude,pulseL,pd,Nreps):
+        dwf.FDwfAnalogOutNodeEnableSet(hdwf, c_int(ChNum), AnalogOutNodeCarrier, c_bool(True))
+        dwf.FDwfAnalogOutNodeFunctionSet(hdwf, c_int(ChNum), AnalogOutNodeCarrier, funcSine)  # Function
+        dwf.FDwfAnalogOutNodeFrequencySet(hdwf, c_int(ChNum), AnalogOutNodeCarrier, c_double(freq))  # frequency
+        dwf.FDwfAnalogOutNodeAmplitudeSet(hdwf, c_int(ChNum), AnalogOutNodeCarrier, c_double(amplitude))  # Amplitude
+        dwf.FDwfAnalogOutRunSet(hdwf, c_int(ChNum), c_double(pulseL))  # run time
+        dwf.FDwfAnalogOutWaitSet(hdwf, c_int(ChNum), c_double(pd))  # wait time
+        dwf.FDwfAnalogOutRepeatSet(hdwf, c_int(ChNum), c_int(Nreps))  # repetitions
+#        dwf.FDwfAnalogOutTriggerSourceSet(hdwf, c_int(ChNum), trigsrcExternal1)  # sets the trigger source        
+        dwf.FDwfAnalogOutTriggerSourceSet(hdwf, c_int(ChNum), trigsrcDigitalOut)  # sets the trigger source
+        y = 0
+        return y   
+    
+    def set_wavegen_arbitrary(amplitude,frequency,ChNum,delay,duration,Nreps,rgdSamples):
+        dwf.FDwfAnalogOutNodeEnableSet(hdwf,c_int(ChNum),AnalogOutNodeCarrier,c_bool(True)) 
+        dwf.FDwfAnalogOutNodeFunctionSet(hdwf,c_int(ChNum),AnalogOutNodeCarrier,funcCustom) #Function
+        dwf.FDwfAnalogOutNodeDataSet(hdwf,c_int(ChNum),AnalogOutNodeCarrier,rgdSamples,c_int(len(rgdSamples)))
+        dwf.FDwfAnalogOutNodeFrequencySet(hdwf,c_int(ChNum),AnalogOutNodeCarrier,c_double(frequency)) # frequency
+        dwf.FDwfAnalogOutNodeAmplitudeSet(hdwf,c_int(ChNum),AnalogOutNodeCarrier,c_double(amplitude)) #Amplitude
+        dwf.FDwfAnalogOutRunSet(hdwf,c_int(ChNum),c_double(duration)) # run time
+        dwf.FDwfAnalogOutWaitSet(hdwf,c_int(ChNum),c_double(delay)) # wait time
+        dwf.FDwfAnalogOutRepeatSet(hdwf,c_int(ChNum),c_int(Nreps)) #repetitions
+        dwf.FDwfAnalogOutTriggerSourceSet(hdwf,c_int(ChNum),trigsrcDigitalOut)
+        y = 0
+        return y
+
+    def set_pos_powersupply(Voltage):
+        dwf.FDwfAnalogIOChannelNodeSet(hdwf, c_int(0), c_int(0), c_double(True))  # enable positive supply
+        dwf.FDwfAnalogIOChannelNodeSet(hdwf, c_int(0), c_int(1), c_double(Voltage))  # set voltage to 5 V
+        dwf.FDwfAnalogIOEnableSet(hdwf, c_int(True))  # master enable
+        y = 0
+        return y
+ 
+    def arm_dio(totalTime):
+        # Finishing setting up the DIO pins.
+        dwf.FDwfDigitalOutRunSet(hdwf, c_double(totalTime))
+        dwf.FDwfDigitalOutWaitSet(hdwf, c_double(0))
+        dwf.FDwfDigitalOutRepeatSet(hdwf, c_int(1))
+        y = 0
+        return y
+    
+    def trigger_and_read_ch0(rgdSamples,numSamp):
+        dwf.FDwfDigitalOutConfigure(hdwf, c_int(1))
+        while True:
+            dwf.FDwfAnalogInStatus(hdwf, c_int(1), byref(sts))
+            if sts.value == DwfStateDone.value:
+                break
+        dwf.FDwfAnalogInStatusData(hdwf, 0, rgdSamples, numSamp)  # get channel 1 data
+        # dwf.FDwfAnalogInStatusData(hdwf, 1, rgdSampless, 8192) # get channel 2 data
+        y = 0
+        return y
+    
+    def arm_analog():
+        dwf.FDwfAnalogInConfigure(hdwf, c_int(1), c_int(1))
+        dwf.FDwfAnalogOutConfigure(hdwf, c_int(0), c_bool(True))
+        dwf.FDwfAnalogOutConfigure(hdwf, c_int(1), c_bool(True))
+        y = 0
+        return y
+    
+    def set_ad2_device(idevice):
+        dwf.FDwfEnumDeviceName(c_int(idevice), devicename)
+        dwf.FDwfEnumSN(c_int(idevice), serialnum)
+        hdwf.value = rghdwf[idevice]
+        y = 0
+        return y
+    
+    def reset_and_close():
+        dwf.FDwfDigitalIOReset()
+        dwf.FDwfDeviceCloseAll()
+        y = 0
+        return y
+    def set_shim(ChNum,offset):
+        dwf.FDwfAnalogOutNodeEnableSet(hdwf, c_int(ChNum), c_int(1))
+        dwf.FDwfAnalogOutNodeFunctionSet(hdwf, c_int(ChNum), funcDC) # Function
+        dwf.FDwfAnalogOutOffsetSet(hdwf, c_int(ChNum), c_double(offset))
+        y = 0
+        if abs(offset) > 0.1:
+            sys.exit("AD2 Voltage will exceed 0.1 V")
+        return y
+
+nProj = 8
+primary = 0
+secondary = 1
+num_avg = 16
+f_start = 3.363*10**6 #reset 3.33
+f_stop = 3.363*10**6 #reset 3.37
+step = 1000
+num_freq = (int((f_stop - f_start) / step)) + 1
+f_range = np.linspace(f_start, f_stop, num_freq)
+amplitude = 5   # voltage 
+AD2_volts = .5
+Tp = .0002   ## Pulse length in seconds
+TE = .0122  #.013   #ADD TE and set it to 10 milliseconds
+predelay = .004    #### TE is 10  #length before a pulse is fired in seconds. for each pulse
+Npulse = 2         # how many pulses to play out
+sampFreq = 10**6
+Tacq =  5*10**-3   # orginally .007
+numSamp =  int(Tacq * sampFreq) #8192
+Trig_AD2 = TE - Tacq/2   #  trigger the AD2 digitizer 2 msec after the start
+LO_start = Trig_AD2 - 0.0005
+tLO = Tacq + 0.001
+SeqTime = .04    # duration that will encompass a single pulse sequence
+DIO_rate = 10**5  # effective clock rate of the digital i/O
+totalCycles = SeqTime*DIO_rate
+IF = 100000
+FOV = 20  #in mm (2 cm)
+num_points = 64
+scale_factor = 1.0    # this is relating gradient pulse to dephasing
+
+att_start = 0.003
+att_end = 0.004  ## 0.0031
+
+T_R = 0.0065 # 0.1    # this is the T/R switch 
+TR = 0.5     # this is the repetion time
+gradient_system = 0.5 # this is in G/cm per amp
+
+# gradient stuff
+grad_ramp = 0.0005   
+grad_hold = Tacq
+dephasing_t = Tacq/2
+
+grad_amp = 1.0
+
+#conversion factor
+G_cm = ((AD2_volts * 11) / 8)  # G/cm
+#determining strength of gradience
+frequency_per_point = 1/Tacq   
+resolution = FOV / num_points
+grad_strength = frequency_per_point /resolution   # Hz/mm
+grad_strength = grad_strength/425.7   # G/cm
+grad_amp = grad_strength /2
+AD2_volts = grad_amp
+#shimming
+offset0 = -0.1 #DO NOT EXCEED 0.1
+offset1 = 0.04
+offset_range = np.linspace(-.1,.1,11)
+shim = 1
+theta_array = np.linspace (0.0, 180.0, int(nProj), endpoint = False)
+
+
+###################################################################
+       # Opens the AD2s
+##################################################################
+
+##   Hide the open_ad2 code by by left click next to the if statement
+open_ad2 = 1
+prt_info = 1
+if open_ad2 == 1:
+    dwf = cdll.dwf
+    # check library loading errors, like: Adept Runtime not found
+    szerr = create_string_buffer(512)
+    dwf.FDwfGetLastErrorMsg(szerr)
+    # declare ctype variables
+    IsInUse = c_bool()
+    hdwf = c_int()
+    rghdwf = []
+    cchannel = c_int()
+    cdevices = c_int()
+    voltage = c_double();
+    sts = c_byte()
+    hzAcq = c_double(sampFreq)  # changes sample frequency into c_double
+    rgdSamples = (c_double * numSamp)()  # list for C1 on scope
+    # declare string variables
+    devicename = create_string_buffer(64)
+    serialnum = create_string_buffer(16)
+  
+    # enumerate connected devices
+    dwf.FDwfEnum(c_int(0), byref(cdevices))
+#            print ("Number of Devices: "+str(cdevices.value))
+    
+    # open and configure devices
+    for idevice in range(0, cdevices.value):
+        dwf.FDwfEnumDeviceName(c_int(idevice), devicename)
+        dwf.FDwfEnumSN(c_int(idevice), serialnum)
+        if (prt_info == 1):
+          print ("------------------------------")
+    #              print (' idevice = ',idevice)
+          print ("Device "+str(idevice+1)+" : ")
+          print ('Serial Number = ',serialnum.value)
+        dwf.FDwfDeviceOpen(c_int(idevice), byref(hdwf))
+        if hdwf.value == 0:
+            szerr = create_string_buffer(512)
+            dwf.FDwfGetLastErrorMsg(szerr)
+            print (szerr.value)
+            dwf.FDwfDeviceCloseAll()
+            sys.exit(0)
+            
+        rghdwf.append(hdwf.value)           
+    # looks up buffer size
+        cBufMax = c_int()
+        dwf.FDwfAnalogInBufferSizeInfo(hdwf, 0, byref(cBufMax))
+        
+        dwf.FDwfEnumDeviceName(c_int(idevice), devicename)
+        dwf.FDwfEnumSN(c_int(idevice), serialnum)
+        hdwf.value = rghdwf[idevice]
+    # configure and start clock
+    hzSys = c_double()
+    dwf.FDwfDigitalOutInternalClockInfo(hdwf, byref(hzSys))
+#  Finished setting up multiple AD2s
+#############################################################
+
+# Setup External Scope trigger
+set_ad2_device(primary)
+Trig_low = .0001
+Trig_high = .001
+y = set_dio(0,totalCycles,Trig_low,Trig_high)
+
+# Setup AD2 Scope trigger
+Trig_low = Trig_AD2 
+Trig_high = Tacq
+y = set_dio(4,totalCycles,Trig_low,Trig_high)
+
+
+################################################################
+################################################################
+# Deleted the RF pulse generator from Example 1
+#######   Added this code to do the custom waveform
+
+amp = 1.0
+
+pulse_time = 0#int((predelay + Tp) * sampFreq)
+# trapezoid 
+cSamples2 = 4096*2 #int(TR * sampFreq)
+run_time = TE + grad_ramp + Tacq/2
+ramp = int(grad_ramp * cSamples2 / run_time)
+hold = int(grad_hold * cSamples2 / run_time)
+acq_start = int((TE - Tacq - 3*grad_ramp) * cSamples2 / run_time)
+dephase_t = int(hold / 2)
+slope_dephase = (scale_factor * amp) / ramp
+slope_acq = amp / ramp
+cSamples = 4096
+
+for theta in theta_array:
+    for f in f_range:
+        rgd_avg = np.zeros(numSamp)
+        for i in range(num_avg):
+            set_pos_powersupply(5)
+            ########################################################################
+            ########################################################################
+            set_dio(2,totalCycles,att_start,att_end)
+            set_dio(3,totalCycles,0.002,T_R)   #to extend to both pulses
+            
+            
+            # set up acquisition (scope) (Lab 2)
+            delay = 0.0
+            amp_list = np.linspace(1,5,10)
+                
+                
+            y1 = set_wavegen(0,f,amplitude,Tp,predelay,Npulse)  ####### Added this line
+            y1 = set_scope(sampFreq,numSamp,Tacq,delay)
+            y2 = set_wavegen(1, f - IF, amplitude, tLO, LO_start, 1)
+            
+            rgdSamples2 = (c_double*cSamples2)()
+            
+            set_ad2_device(secondary)
+            channel = c_int(0)   ### changed to channel 1
+            
+            
+            
+            
+            # rgdSamples2[int(pulse_time):int(pulse_time+ramp)] = np.linspace(0,amp,ramp)
+            # start =pulse_time+ramp
+            # rgdSamples2[int(start + hold/2):int(start + ramp + hold/2)] = np.linspace(amp,amp,int(hold/2))
+            
+            set_pos_powersupply(5)
+            
+            # rgdSamples2[pulse_time: pulse_time+ramp] = np.linspace(0,amp,ramp)
+            # rgdSamples2[pulse_time+ramp :pulse_time+ramp + hold/2 ] = np.linspace(amp,amp,int(hold//2))
+            
+            for i in range(cSamples2):
+                if i < pulse_time:  # low until first pulse over
+                    rgdSamples2[i] = 0
+            
+                elif i < pulse_time + ramp:  # dephase ramp up
+                    # from 0 to scale_factor*amp over 'ramp' samples
+                    rgdSamples2[i] = slope_dephase * (i - pulse_time)
+            
+                elif i < pulse_time + ramp + dephase_t:  # dephase plateau (hold/2)
+                    rgdSamples2[i] = scale_factor * amp
+            
+                elif i < pulse_time + 2 * ramp + dephase_t:  # dephase ramp down
+                    # from scale_factor*amp back to 0 over 'ramp' samples
+                    start_down = pulse_time + ramp + dephase_t
+                    rgdSamples2[i] = slope_dephase * (start_down + ramp - i)
+            
+                elif i < acq_start - ramp:  # hold low before acq ramp up
+                    # NOTE: use '- ramp' instead of '- 2*ramp' so ramp length is 'ramp'
+                    rgdSamples2[i] = 0
+            
+                elif i < acq_start:  # ramp up to acq
+                    # from 0 to amp over 'ramp' samples
+                    start_up = acq_start - ramp
+                    rgdSamples2[i] = slope_acq * (i - start_up)
+            
+                elif i < acq_start + hold:  # acq plateau
+                    rgdSamples2[i] = amp
+            
+                elif i < acq_start + hold + ramp:  # ramp down from acq
+                    # from amp back to 0 over 'ramp' samples
+                    start_down = acq_start + hold
+                    rgdSamples2[i] = slope_acq * (start_down + ramp - i)
+            
+                else:  # after everything, low again
+                    rgdSamples2[i] = 0
+
+                    
+                # rgdSamples2[acq_start:acq_start+hold] = np.linspace(0,amp,hold)
+                
+                    
+            # plt.figure()
+            # plt.plot(rgdSamples2)
+            # plt.show()
+            
+            
+            #shimming
+            if shim == 1:
+                # set up phase encode AD2
+                y1 = set_shim(0,offset0) # Set offset on channel 0 to offset0
+                y1 = set_shim(1,offset1) # Set offset on channel 1 to offset1
+            
+            #Setting Gradients for rotation
+            GfeWFRM = rgdSamples2
+            GzWFRMnp = GfeWFRM * np.cos(theta)
+            GzWFRM = (ctypes.c_double * len(GzWFRMnp))(*GzWFRMnp)
+            
+            GxWFRMnp = GfeWFRM * np.sin(theta)
+            GxWFRM = (ctypes.c_double * len(GxWFRMnp))(*GxWFRMnp)
+
+            print("Generating Z")
+            dwf.FDwfAnalogOutNodeEnableSet(hdwf, channel, AnalogOutNodeCarrier, c_int(1))
+            dwf.FDwfAnalogOutNodeFunctionSet(hdwf, channel, AnalogOutNodeCarrier, funcCustom) 
+            dwf.FDwfAnalogOutNodeDataSet(hdwf, channel, AnalogOutNodeCarrier, GzWFRM, c_int(cSamples2))
+            dwf.FDwfAnalogOutNodeFrequencySet(hdwf, channel, AnalogOutNodeCarrier, c_double(1/run_time)) 
+            dwf.FDwfAnalogOutNodeAmplitudeSet(hdwf, channel, AnalogOutNodeCarrier,c_double(grad_amp)) 
+            
+            dwf.FDwfAnalogOutRunSet(hdwf, channel, c_double(run_time)) # run for 2 periods   CHANGED TO 1 PERIOD
+            dwf.FDwfAnalogOutWaitSet(hdwf, channel, c_double(predelay+Tp/2)) # wait one pulse time # CHANGED 
+            dwf.FDwfAnalogOutRepeatSet(hdwf, channel, c_int(1)) # repeat 3 times  I CHANGED THIS TO 1
+            dwf.FDwfAnalogOutTriggerSourceSet(hdwf, channel, trigsrcExternal1)  # sets the trigger source
+            #dwf.FDwfAnalogOutConfigure(hdwf, channel, c_int(1))    # This is in "arm_analog" function
+            
+            y1 = arm_analog()   
+            
+            channel = c_int(1)
+            
+            print("Generating X")
+            dwf.FDwfAnalogOutNodeEnableSet(hdwf, channel, AnalogOutNodeCarrier, c_int(1))
+            dwf.FDwfAnalogOutNodeFunctionSet(hdwf, channel, AnalogOutNodeCarrier, funcCustom) 
+            dwf.FDwfAnalogOutNodeDataSet(hdwf, channel, AnalogOutNodeCarrier, GxWFRM, c_int(cSamples2))
+            dwf.FDwfAnalogOutNodeFrequencySet(hdwf, channel, AnalogOutNodeCarrier, c_double(1/run_time)) 
+            dwf.FDwfAnalogOutNodeAmplitudeSet(hdwf, channel, AnalogOutNodeCarrier, c_double(grad_amp)) 
+            
+            dwf.FDwfAnalogOutRunSet(hdwf, channel, c_double(run_time)) # run for 2 periods   CHANGED TO 1 PERIOD
+            dwf.FDwfAnalogOutWaitSet(hdwf, channel, c_double(predelay+Tp/2)) # wait one pulse time # CHANGED 
+            dwf.FDwfAnalogOutRepeatSet(hdwf, channel, c_int(1)) # repeat 3 times  I CHANGED THIS TO 1
+            dwf.FDwfAnalogOutTriggerSourceSet(hdwf, channel, trigsrcExternal1)  # sets the trigger source
+            #dwf.FDwfAnalogOutConfigure(hdwf, channel, c_int(1))    # This is in "arm_analog" function
+            
+            y2 = arm_analog()  
+            
+            
+        # Arm the analog and digital sections 
+            set_ad2_device(primary)
+            dwell = 1.0 / sampFreq
+            time2 = []
+            for i in range(0,numSamp):
+                time2.append(i*dwell)
+            
+            
+             ## Arming AD2
+            y1 = arm_dio(SeqTime)
+            y1 = arm_analog()      
+            time.sleep(TR) ## Repetition rate changed to 5
+             
+             # Time stuff
+            now = datetime.now()
+            print(now) 
+             
+            print("going to trigger")
+            y1 = trigger_and_read_ch0(rgdSamples,numSamp)
+            print("back from trigger")
+            rgd_avg = rgd_avg + rgdSamples[:]
+        rgd_avg = rgd_avg / num_avg
+        Tacqms = Tacq * 1000
+        # plt.plot(time2, rgd_avg)
+        now = str(now)
+        f_string = str(f)
+             
+        ## Labels
+    
+        
+        ## fft stuff
+        sig= list(rgd_avg)
+        T = numSamp
+        limts = [IF - 25000, IF + 25000]
+    
+        sos = signal.butter(2,limts,'bandpass', fs = sampFreq,output = 'sos')
+        filtered = signal.sosfilt(sos, sig)  
+        filtered = np.hamming(len(filtered)) * filtered
+        fft_values = np.fft.fft(filtered)
+        
+
+        N = len(sig)
+        
+        
+        freq = np.fft.fftfreq(N,1/sampFreq)
+        
+        magnitude = np.abs(fft_values)
+        
+        peak_index = np.argmax(magnitude)
+        peak_freq = freq[peak_index]
+        peak_mag = magnitude[peak_index]
+        # Half maximum
+        half_max = peak_mag / 2.0
+    
+        # Indices where magnitude crosses the half max
+        # Find left crossing
+        left_index = np.where(magnitude[:peak_index] <= half_max)[0]
+        left_cross = freq[left_index[-1]] if len(left_index) > 0 else freq[0]
+    
+        # Find right crossing
+        right_index = np.where(magnitude[peak_index:] <= half_max)[0]
+        right_cross = freq[peak_index + right_index[0]] if len(right_index) > 0 else freq[-1]
+    
+        fwhm = right_cross - left_cross
+        
+        #SNR
+        noise_std = 0.002 #calculated in prior lab in volts
+        Asignal = np.abs(max(rgd_avg))
+        SNR_1 = Asignal / noise_std #only calculated during one of the scans
+        SNR = SNR_1 * np.sqrt(num_avg)
+            
+
+        # plt.subplot(2,1,1)
+        plt.plot(time2, filtered)
+        pulse = Tp * 10**6
+        Time_E = (TE - predelay) * 10**3
+        Time_R = TR * 10**3
+        plt.text(0.1, 0.85,f"Tp = {pulse:.2f} us", transform = plt.gca().transAxes)
+        plt.text(0.1, 0.7,f"TE = {Time_E:.2f} ms", transform = plt.gca().transAxes)
+        plt.text(0.1, 0.55,f"TR = {Time_R:.2f} ms", transform = plt.gca().transAxes)
+        plt.title('Eric and Matthew frequency: ' + f_string + ' Offset (' + str(offset0) +','+str(offset1)+')')
+        
+        plt.xlabel('Time (sec)')
+        plt.ylabel('Amplitude (V)')
+        plt.show()
+        
+        lst_theta = str(theta).split(".")
+        str_theta = lst_theta[0] + "_" + lst_theta[1]
+        #plt.subplot(2,1,2)
+        f_pos = freq[:N//2]
+        mag_pos = magnitude[:N//2]
+        
+        band_mask = (f_pos >= 70e3) & (f_pos <= 130e3)
+        
+        
+        #plt.plot(freq[:N//2]/1000,magnitude[:N//2])
+        plt.plot(f_pos[band_mask] / 1000, mag_pos[band_mask])
+        
+        plt.text(0.05, 0.9,f"HM = {half_max:.2f}", transform = plt.gca().transAxes)
+        plt.text(0.05, 0.8,f"SNR = {SNR:.2f}", transform = plt.gca().transAxes)
+        plt.text(0.05, 0.7,f"FOV = {FOV} mm", transform = plt.gca().transAxes)
+        plt.text(0.05, 0.6,f"AD2 Voltage = {AD2_volts:.2f} V", transform = plt.gca().transAxes)
+        plt.text(0.05, 0.5,f"Fs = {sampFreq} Hz", transform = plt.gca().transAxes)
+        plt.title('FFT of signal @ ' + str(theta) + ' Offset: (' + str(offset0) + ',' +str(offset1) + ')')
+        plt.xlabel('Frequency (kHz)')
+        plt.ylabel('Magnitude')
+        #plt.xlim(80,120)
+        
+        np.savetxt("proj" + str_theta + ".csv",mag_pos[band_mask],delimiter=",",fmt = "%.6e")
+        print('CSV file created succesfully')
+        
+        
+        plt.tight_layout()
+        plt.show()
+    
+
+y1 = reset_and_close()
